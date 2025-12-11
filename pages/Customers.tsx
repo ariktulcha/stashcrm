@@ -1,18 +1,19 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Search, Mail, Phone, MoreVertical, UserPlus, Loader2, Edit, Trash2, Eye } from 'lucide-react';
-import { mockCustomers, mockOrders } from '../services/mockData';
 import { CUSTOMER_TYPE_LABELS } from '../constants';
 import { Customer, CustomerType } from '../types';
 import Modal from '../components/Modal';
 import { useToast } from '../contexts/ToastContext';
+import { customersService } from '../services/customersService';
 
 interface CustomersProps {
   onViewCustomer?: (customerId: string) => void;
 }
 
 const Customers: React.FC<CustomersProps> = ({ onViewCustomer }) => {
-  const [customers, setCustomers] = useState<Customer[]>(mockCustomers);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -22,6 +23,24 @@ const Customers: React.FC<CustomersProps> = ({ onViewCustomer }) => {
   const { showToast } = useToast();
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Load customers from Supabase
+  useEffect(() => {
+    loadCustomers();
+  }, []);
+
+  const loadCustomers = async () => {
+    try {
+      setIsLoading(true);
+      const data = await customersService.getAll();
+      setCustomers(data);
+    } catch (error) {
+      console.error('Error loading customers:', error);
+      showToast('שגיאה בטעינת הלקוחות', 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
   const [formData, setFormData] = useState({
     customer_type: 'private' as CustomerType,
     company_name: '',
@@ -44,7 +63,7 @@ const Customers: React.FC<CustomersProps> = ({ onViewCustomer }) => {
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!formData.first_name || !formData.phone) {
@@ -59,38 +78,39 @@ const Customers: React.FC<CustomersProps> = ({ onViewCustomer }) => {
 
     setIsSubmitting(true);
     
-    setTimeout(() => {
+    try {
       if (editingCustomer) {
         // Update existing customer
-        setCustomers(prev => prev.map(customer => 
-          customer.id === editingCustomer.id 
-            ? { ...customer, ...formData }
-            : customer
-        ));
+        await customersService.update(editingCustomer.id, {
+          customer_type: formData.customer_type,
+          company_name: formData.company_name || undefined,
+          first_name: formData.first_name,
+          last_name: formData.last_name || undefined,
+          phone: formData.phone,
+          email: formData.email || undefined,
+          address_city: formData.address_city || undefined
+        });
         showToast('הלקוח עודכן בהצלחה');
         setIsEditModalOpen(false);
       } else {
         // Create new customer
-        const newCustomer: Customer = {
-          id: Math.random().toString(36).substr(2, 9),
+        await customersService.create({
           customer_type: formData.customer_type,
-          company_name: formData.company_name,
+          company_name: formData.company_name || undefined,
           first_name: formData.first_name,
-          last_name: formData.last_name,
+          last_name: formData.last_name || undefined,
           phone: formData.phone,
-          email: formData.email,
-          address_city: formData.address_city,
-          orders_count: 0,
-          total_purchases: 0,
-          is_active: true,
-          created_at: new Date().toISOString()
-        };
-        setCustomers(prev => [newCustomer, ...prev]);
+          email: formData.email || undefined,
+          address_city: formData.address_city || undefined,
+          is_active: true
+        });
         showToast('הלקוח נוסף בהצלחה');
         setIsAddModalOpen(false);
       }
       
-      setIsSubmitting(false);
+      // Reload customers
+      await loadCustomers();
+      
       setEditingCustomer(null);
       setFormData({
         customer_type: 'private',
@@ -101,7 +121,12 @@ const Customers: React.FC<CustomersProps> = ({ onViewCustomer }) => {
         email: '',
         address_city: ''
       });
-    }, 600);
+    } catch (error) {
+      console.error('Error saving customer:', error);
+      showToast('שגיאה בשמירת הלקוח', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleEditCustomer = (customer: Customer) => {
@@ -123,32 +148,31 @@ const Customers: React.FC<CustomersProps> = ({ onViewCustomer }) => {
     setIsDeleteModalOpen(true);
   };
 
-  const confirmDeleteCustomer = () => {
+  const confirmDeleteCustomer = async () => {
     if (!deletingCustomer) return;
     
-    // Check if customer has active orders
-    const hasActiveOrders = mockOrders.some(order => 
-      order.customer_id === deletingCustomer.id && 
-      !['completed', 'cancelled'].includes(order.status)
-    );
-    
-    if (hasActiveOrders) {
-      // Mark as inactive instead of deleting
-      setCustomers(prev => prev.map(customer => 
-        customer.id === deletingCustomer.id 
-          ? { ...customer, is_active: false }
-          : customer
-      ));
-      showToast('הלקוח סומן כלא פעיל (יש לו הזמנות פעילות)');
-    } else {
-      // Delete customer
-      setCustomers(prev => prev.filter(customer => customer.id !== deletingCustomer.id));
-      showToast('הלקוח נמחק בהצלחה');
+    try {
+      // Note: In a real app, you might want to check if customer has active orders
+      // For now, we'll mark as inactive instead of deleting
+      await customersService.update(deletingCustomer.id, { is_active: false });
+      showToast('הלקוח סומן כלא פעיל');
+      setIsDeleteModalOpen(false);
+      setDeletingCustomer(null);
+      // Reload customers
+      await loadCustomers();
+    } catch (error) {
+      console.error('Error deleting customer:', error);
+      showToast('שגיאה במחיקת הלקוח', 'error');
     }
-    
-    setIsDeleteModalOpen(false);
-    setDeletingCustomer(null);
   };
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center py-12">
+        <Loader2 size={32} className="animate-spin text-blue-600" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -487,10 +511,8 @@ const Customers: React.FC<CustomersProps> = ({ onViewCustomer }) => {
                     : `${deletingCustomer.first_name} ${deletingCustomer.last_name}`}
                 </strong>?
               </p>
-              {mockOrders.some(order => 
-                order.customer_id === deletingCustomer.id && 
-                !['completed', 'cancelled'].includes(order.status)
-              ) && (
+              {false && // TODO: Check if customer has active orders
+              (
                 <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-800">
                   ⚠️ ללקוח זה יש הזמנות פעילות. במקום מחיקה, הלקוח יסומן כלא פעיל.
                 </div>

@@ -1,16 +1,19 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Wallet, TrendingUp, TrendingDown, Plus, Edit, Trash2, Loader2, Download, FileText, Calendar, Filter } from 'lucide-react';
-import { mockExpenses, mockOrders } from '../services/mockData';
 import { EXPENSE_CATEGORY_LABELS } from '../constants';
 import StatCard from '../components/StatCard';
-import { Expense } from '../types';
+import { Expense, Order } from '../types';
 import Modal from '../components/Modal';
 import { useToast } from '../contexts/ToastContext';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
+import { expensesService } from '../services/expensesService';
+import { ordersService } from '../services/ordersService';
 
 const Finances: React.FC = () => {
-  const [expenses, setExpenses] = useState<Expense[]>(mockExpenses);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -22,6 +25,28 @@ const Finances: React.FC = () => {
   const { showToast } = useToast();
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Load data from Supabase
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const loadData = async () => {
+    try {
+      setIsLoading(true);
+      const [expensesData, ordersData] = await Promise.all([
+        expensesService.getAll(),
+        ordersService.getAll()
+      ]);
+      setExpenses(expensesData);
+      setOrders(ordersData);
+    } catch (error) {
+      console.error('Error loading finances data:', error);
+      showToast('שגיאה בטעינת הנתונים', 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
   const [formData, setFormData] = useState({
     category: 'other',
     description: '',
@@ -53,7 +78,7 @@ const Finances: React.FC = () => {
       return expenseDate >= startDate && expenseDate <= endDate;
     });
 
-    const filteredOrders = mockOrders.filter(o => {
+    const filteredOrders = orders.filter(o => {
       const orderDate = new Date(o.created_at);
       return orderDate >= startDate && orderDate <= endDate && ['paid', 'completed'].includes(o.payment_status);
     });
@@ -126,7 +151,7 @@ const Finances: React.FC = () => {
 
   const COLORS = ['#3b82f6', '#ef4444', '#f59e0b', '#10b981', '#8b5cf6', '#ec4899', '#06b6d4'];
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!formData.description || !formData.amount) {
@@ -135,37 +160,32 @@ const Finances: React.FC = () => {
     }
 
     setIsSubmitting(true);
-    setTimeout(() => {
+    try {
       if (editingExpense) {
-        setExpenses(prev => prev.map(expense => 
-          expense.id === editingExpense.id 
-            ? {
-                ...expense,
-                category: formData.category,
-                description: formData.description,
-                amount: parseFloat(formData.amount),
-                date: formData.date,
-                supplier_name: formData.supplier_name || undefined
-              }
-            : expense
-        ));
-        showToast('ההוצאה עודכנה בהצלחה');
-        setIsEditModalOpen(false);
-      } else {
-        const newExpense: Expense = {
-          id: Math.random().toString(36).substr(2, 9),
+        await expensesService.update(editingExpense.id, {
           category: formData.category,
           description: formData.description,
           amount: parseFloat(formData.amount),
           date: formData.date,
           supplier_name: formData.supplier_name || undefined
-        };
-        setExpenses(prev => [newExpense, ...prev]);
+        });
+        showToast('ההוצאה עודכנה בהצלחה');
+        setIsEditModalOpen(false);
+      } else {
+        await expensesService.create({
+          category: formData.category,
+          description: formData.description,
+          amount: parseFloat(formData.amount),
+          date: formData.date,
+          supplier_name: formData.supplier_name || undefined
+        });
         showToast('ההוצאה נוספה בהצלחה');
         setIsAddModalOpen(false);
       }
       
-      setIsSubmitting(false);
+      // Reload data
+      await loadData();
+      
       setEditingExpense(null);
       setFormData({
         category: 'other',
@@ -174,7 +194,12 @@ const Finances: React.FC = () => {
         date: new Date().toISOString().split('T')[0],
         supplier_name: ''
       });
-    }, 500);
+    } catch (error) {
+      console.error('Error saving expense:', error);
+      showToast('שגיאה בשמירת ההוצאה', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleEditExpense = (expense: Expense) => {
@@ -194,12 +219,19 @@ const Finances: React.FC = () => {
     setIsDeleteModalOpen(true);
   };
 
-  const confirmDeleteExpense = () => {
+  const confirmDeleteExpense = async () => {
     if (!deletingExpense) return;
-    setExpenses(prev => prev.filter(expense => expense.id !== deletingExpense.id));
-    showToast('ההוצאה נמחקה בהצלחה');
-    setIsDeleteModalOpen(false);
-    setDeletingExpense(null);
+    try {
+      await expensesService.delete(deletingExpense.id);
+      showToast('ההוצאה נמחקה בהצלחה');
+      setIsDeleteModalOpen(false);
+      setDeletingExpense(null);
+      // Reload data
+      await loadData();
+    } catch (error) {
+      console.error('Error deleting expense:', error);
+      showToast('שגיאה במחיקת ההוצאה', 'error');
+    }
   };
 
   const handleExportExcel = () => {
@@ -241,6 +273,14 @@ const Finances: React.FC = () => {
     // Placeholder for PDF export - would need a library like jsPDF
     showToast('ייצוא PDF יוזמן בקרוב', 'info');
   };
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center py-12">
+        <Loader2 size={32} className="animate-spin text-blue-600" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

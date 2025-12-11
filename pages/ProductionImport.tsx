@@ -1,20 +1,39 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Plane, Ship, Edit, Plus, Loader2, Package, AlertCircle } from 'lucide-react';
-import { mockImportOrders, mockOrders } from '../services/mockData';
 import { IMPORT_STATUS_LABELS } from '../constants';
 import { ImportOrder, ImportStatus } from '../types';
 import Modal from '../components/Modal';
 import { useToast } from '../contexts/ToastContext';
+import { importOrdersService } from '../services/importOrdersService';
 
 const ProductionImport: React.FC = () => {
-  const [importOrders, setImportOrders] = useState<ImportOrder[]>(mockImportOrders);
+  const [importOrders, setImportOrders] = useState<ImportOrder[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingOrder, setEditingOrder] = useState<ImportOrder | null>(null);
   const { showToast } = useToast();
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Load import orders from Supabase
+  useEffect(() => {
+    loadImportOrders();
+  }, []);
+
+  const loadImportOrders = async () => {
+    try {
+      setIsLoading(true);
+      const data = await importOrdersService.getAll();
+      setImportOrders(data);
+    } catch (error) {
+      console.error('Error loading import orders:', error);
+      showToast('שגיאה בטעינת הזמנות היבוא', 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
   const [formData, setFormData] = useState({
     supplier_name: '',
     order_numbers: '',
@@ -47,18 +66,20 @@ const ProductionImport: React.FC = () => {
     });
   }, [importOrders]);
 
-  const handleStatusUpdate = (orderId: string, newStatus: ImportStatus) => {
-    setImportOrders(prev => prev.map(order => 
-      order.id === orderId ? { ...order, status: newStatus } : order
-    ));
-    
-    // Update in mock data
-    const index = mockImportOrders.findIndex(o => o.id === orderId);
-    if (index !== -1) {
-      mockImportOrders[index] = { ...mockImportOrders[index], status: newStatus };
+  const handleStatusUpdate = async (orderId: string, newStatus: ImportStatus) => {
+    try {
+      await importOrdersService.update(orderId, { status: newStatus });
+      
+      // Update local state
+      setImportOrders(prev => prev.map(order => 
+        order.id === orderId ? { ...order, status: newStatus } : order
+      ));
+      
+      showToast('סטטוס היבוא עודכן בהצלחה');
+    } catch (error) {
+      console.error('Error updating import order status:', error);
+      showToast('שגיאה בעדכון סטטוס היבוא', 'error');
     }
-    
-    showToast('סטטוס היבוא עודכן בהצלחה');
   };
 
   const handleEditOrder = (order: ImportOrder) => {
@@ -74,7 +95,7 @@ const ProductionImport: React.FC = () => {
     setIsEditModalOpen(true);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!formData.supplier_name || !formData.order_numbers) {
@@ -83,40 +104,35 @@ const ProductionImport: React.FC = () => {
     }
 
     setIsSubmitting(true);
-    setTimeout(() => {
+    
+    try {
       if (editingOrder) {
-        setImportOrders(prev => prev.map(order => 
-          order.id === editingOrder.id 
-            ? {
-                ...order,
-                supplier_name: formData.supplier_name,
-                order_numbers: formData.order_numbers.split(',').map(s => s.trim()),
-                total_cost: parseFloat(formData.total_cost) || 0,
-                estimated_arrival: formData.estimated_arrival,
-                tracking_number: formData.tracking_number || undefined,
-                status: formData.status
-              }
-            : order
-        ));
-        showToast('הזמנת היבוא עודכנה בהצלחה');
-        setIsEditModalOpen(false);
-      } else {
-        const newOrder: ImportOrder = {
-          id: `IMP-${Math.random().toString(36).substr(2, 6).toUpperCase()}`,
+        await importOrdersService.update(editingOrder.id, {
           supplier_name: formData.supplier_name,
           order_numbers: formData.order_numbers.split(',').map(s => s.trim()),
           total_cost: parseFloat(formData.total_cost) || 0,
           estimated_arrival: formData.estimated_arrival,
           tracking_number: formData.tracking_number || undefined,
           status: formData.status
-        };
-        setImportOrders(prev => [newOrder, ...prev]);
-        mockImportOrders.push(newOrder);
+        });
+        showToast('הזמנת היבוא עודכנה בהצלחה');
+        setIsEditModalOpen(false);
+      } else {
+        await importOrdersService.create({
+          supplier_name: formData.supplier_name,
+          order_numbers: formData.order_numbers.split(',').map(s => s.trim()),
+          total_cost: parseFloat(formData.total_cost) || 0,
+          estimated_arrival: formData.estimated_arrival,
+          tracking_number: formData.tracking_number || undefined,
+          status: formData.status
+        });
         showToast('הזמנת יבוא נוצרה בהצלחה');
         setIsAddModalOpen(false);
       }
       
-      setIsSubmitting(false);
+      // Reload import orders
+      await loadImportOrders();
+      
       setEditingOrder(null);
       setFormData({
         supplier_name: '',
@@ -126,8 +142,21 @@ const ProductionImport: React.FC = () => {
         tracking_number: '',
         status: 'quote_requested'
       });
-    }, 500);
+    } catch (error) {
+      console.error('Error saving import order:', error);
+      showToast('שגיאה בשמירת הזמנת היבוא', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center py-12">
+        <Loader2 size={32} className="animate-spin text-blue-600" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

@@ -1,6 +1,9 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { Search, X, ArrowRight, ShoppingCart, Users, Package } from 'lucide-react';
-import { mockOrders, mockCustomers, mockProducts } from '../services/mockData';
+import { ordersService } from '../services/ordersService';
+import { customersService } from '../services/customersService';
+import { productsService } from '../services/productsService';
+import { Order, Customer, Product } from '../types';
 
 interface CommandPaletteProps {
   isOpen: boolean;
@@ -19,6 +22,31 @@ interface SearchResult {
 const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose, onNavigate }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+
+  // Load data when palette opens
+  useEffect(() => {
+    if (isOpen) {
+      loadData();
+    }
+  }, [isOpen]);
+
+  const loadData = async () => {
+    try {
+      const [ordersData, customersData, productsData] = await Promise.all([
+        ordersService.getAll(),
+        customersService.getAll(),
+        productsService.getAll()
+      ]);
+      setOrders(ordersData);
+      setCustomers(customersData);
+      setProducts(productsData);
+    } catch (error) {
+      console.error('Error loading command palette data:', error);
+    }
+  };
 
   const results = useMemo<SearchResult[]>(() => {
     if (!searchTerm.trim()) return [];
@@ -27,7 +55,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose, onNavi
     const searchResults: SearchResult[] = [];
 
     // Search orders
-    mockOrders
+    orders
       .filter(order => 
         order.order_number.toLowerCase().includes(term) ||
         order.customer_name.toLowerCase().includes(term)
@@ -71,7 +99,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose, onNavi
       });
 
     // Search products
-    mockProducts
+    products
       .filter(product => 
         product.name.toLowerCase().includes(term) ||
         product.sku.toLowerCase().includes(term)
@@ -91,7 +119,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose, onNavi
       });
 
     return searchResults;
-  }, [searchTerm, onNavigate, onClose]);
+  }, [searchTerm, orders, customers, products, onNavigate, onClose]);
 
   useEffect(() => {
     if (isOpen) {

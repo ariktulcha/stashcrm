@@ -1,14 +1,15 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AlertTriangle, Plus, Edit, Trash2, PackagePlus, Loader2 } from 'lucide-react';
-import { mockStockItems } from '../services/mockData';
 import { STOCK_TYPE_LABELS } from '../constants';
 import { StockItem } from '../types';
 import Modal from '../components/Modal';
 import { useToast } from '../contexts/ToastContext';
+import { stockService } from '../services/stockService';
 
 const Inventory: React.FC = () => {
-  const [stockItems, setStockItems] = useState<StockItem[]>(mockStockItems);
+  const [stockItems, setStockItems] = useState<StockItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -34,7 +35,25 @@ const Inventory: React.FC = () => {
     quantity: ''
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  // Load stock items from Supabase
+  useEffect(() => {
+    loadStockItems();
+  }, []);
+
+  const loadStockItems = async () => {
+    try {
+      setIsLoading(true);
+      const items = await stockService.getAll();
+      setStockItems(items);
+    } catch (error) {
+      console.error('Error loading stock items:', error);
+      showToast('שגיאה בטעינת הנתונים', 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!formData.sku || !formData.name) {
@@ -43,26 +62,22 @@ const Inventory: React.FC = () => {
     }
 
     setIsSubmitting(true);
-    setTimeout(() => {
+    try {
       if (editingItem) {
-        setStockItems(prev => prev.map(item => 
-          item.id === editingItem.id 
-            ? {
-                ...item,
-                sku: formData.sku,
-                name: formData.name,
-                type: formData.type as any,
-                min_quantity: parseInt(formData.min_quantity) || 0,
-                unit: formData.unit,
-                unit_cost: parseFloat(formData.unit_cost) || 0
-              }
-            : item
-        ));
+        // Update existing item
+        await stockService.update(editingItem.id, {
+          sku: formData.sku,
+          name: formData.name,
+          type: formData.type as any,
+          min_quantity: parseInt(formData.min_quantity) || 0,
+          unit: formData.unit,
+          unit_cost: parseFloat(formData.unit_cost) || 0
+        });
         showToast('הפריט עודכן בהצלחה');
         setIsEditModalOpen(false);
       } else {
-        const newItem: StockItem = {
-          id: Math.random().toString(36).substr(2, 9),
+        // Create new item
+        await stockService.create({
           sku: formData.sku,
           name: formData.name,
           type: formData.type as any,
@@ -70,13 +85,14 @@ const Inventory: React.FC = () => {
           min_quantity: parseInt(formData.min_quantity) || 0,
           unit: formData.unit,
           unit_cost: parseFloat(formData.unit_cost) || 0
-        };
-        setStockItems(prev => [newItem, ...prev]);
+        });
         showToast('הפריט נוסף בהצלחה');
         setIsAddModalOpen(false);
       }
       
-      setIsSubmitting(false);
+      // Reload items
+      await loadStockItems();
+      
       setEditingItem(null);
       setFormData({
         sku: '',
@@ -87,7 +103,12 @@ const Inventory: React.FC = () => {
         unit: 'units',
         unit_cost: ''
       });
-    }, 500);
+    } catch (error) {
+      console.error('Error saving stock item:', error);
+      showToast('שגיאה בשמירת הפריט', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleEditItem = (item: StockItem) => {
@@ -109,12 +130,19 @@ const Inventory: React.FC = () => {
     setIsDeleteModalOpen(true);
   };
 
-  const confirmDeleteItem = () => {
+  const confirmDeleteItem = async () => {
     if (!deletingItem) return;
-    setStockItems(prev => prev.filter(item => item.id !== deletingItem.id));
-    showToast('הפריט נמחק בהצלחה');
-    setIsDeleteModalOpen(false);
-    setDeletingItem(null);
+    try {
+      await stockService.delete(deletingItem.id);
+      showToast('הפריט נמחק בהצלחה');
+      setIsDeleteModalOpen(false);
+      setDeletingItem(null);
+      // Reload items
+      await loadStockItems();
+    } catch (error) {
+      console.error('Error deleting stock item:', error);
+      showToast('שגיאה במחיקת הפריט', 'error');
+    }
   };
 
   const handleStockUpdate = (item: StockItem) => {
@@ -123,7 +151,7 @@ const Inventory: React.FC = () => {
     setIsStockUpdateModalOpen(true);
   };
 
-  const confirmStockUpdate = () => {
+  const confirmStockUpdate = async () => {
     if (!stockItem || !stockUpdate.quantity) {
       showToast('נא להזין כמות', 'error');
       return;
@@ -135,25 +163,31 @@ const Inventory: React.FC = () => {
       return;
     }
 
-    setStockItems(prev => prev.map(item => {
-      if (item.id === stockItem.id) {
-        let newQuantity = item.current_quantity;
-        if (stockUpdate.type === 'add') {
-          newQuantity += quantity;
-        } else if (stockUpdate.type === 'subtract') {
-          newQuantity = Math.max(0, newQuantity - quantity);
-        } else {
-          newQuantity = quantity;
-        }
-        return { ...item, current_quantity: newQuantity };
+    try {
+      let newQuantity = stockItem.current_quantity;
+      if (stockUpdate.type === 'add') {
+        newQuantity += quantity;
+      } else if (stockUpdate.type === 'subtract') {
+        newQuantity = Math.max(0, newQuantity - quantity);
+      } else {
+        newQuantity = quantity;
       }
-      return item;
-    }));
 
-    showToast('המלאי עודכן בהצלחה');
-    setIsStockUpdateModalOpen(false);
-    setStockItem(null);
-    setStockUpdate({ type: 'add', quantity: '' });
+      await stockService.update(stockItem.id, {
+        current_quantity: newQuantity
+      });
+
+      showToast('המלאי עודכן בהצלחה');
+      setIsStockUpdateModalOpen(false);
+      setStockItem(null);
+      setStockUpdate({ type: 'add', quantity: '' });
+      
+      // Reload items
+      await loadStockItems();
+    } catch (error) {
+      console.error('Error updating stock quantity:', error);
+      showToast('שגיאה בעדכון המלאי', 'error');
+    }
   };
 
   return (
@@ -172,21 +206,33 @@ const Inventory: React.FC = () => {
         </button>
       </div>
 
-      <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
-        <table className="w-full text-right">
-          <thead className="bg-slate-50 text-slate-600 font-medium text-sm">
-            <tr>
-              <th className="px-6 py-4">מק״ט</th>
-              <th className="px-6 py-4">שם הפריט</th>
-              <th className="px-6 py-4">סוג</th>
-              <th className="px-6 py-4">כמות במלאי</th>
-              <th className="px-6 py-4">סף התראה</th>
-              <th className="px-6 py-4">עלות ליח'</th>
-              <th className="px-6 py-4"></th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {stockItems.map(item => (
+      {isLoading ? (
+        <div className="flex justify-center items-center py-12">
+          <Loader2 size={32} className="animate-spin text-blue-600" />
+        </div>
+      ) : (
+        <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+          <table className="w-full text-right">
+            <thead className="bg-slate-50 text-slate-600 font-medium text-sm">
+              <tr>
+                <th className="px-6 py-4">מק״ט</th>
+                <th className="px-6 py-4">שם הפריט</th>
+                <th className="px-6 py-4">סוג</th>
+                <th className="px-6 py-4">כמות במלאי</th>
+                <th className="px-6 py-4">סף התראה</th>
+                <th className="px-6 py-4">עלות ליח'</th>
+                <th className="px-6 py-4"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {stockItems.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-6 py-12 text-center text-slate-500">
+                    אין פריטים במלאי. הוסף פריט חדש להתחלה.
+                  </td>
+                </tr>
+              ) : (
+                stockItems.map(item => (
               <tr key={item.id} className="hover:bg-slate-50 group">
                 <td className="px-6 py-4 font-mono text-sm text-slate-600">{item.sku}</td>
                 <td className="px-6 py-4 font-medium text-slate-900">{item.name}</td>
@@ -231,10 +277,11 @@ const Inventory: React.FC = () => {
                   </div>
                 </td>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            )))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* Add/Edit Item Modal */}
       <Modal

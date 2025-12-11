@@ -1,7 +1,6 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Phone, MoreHorizontal, Plus, Loader2, Edit, UserPlus, ShoppingCart, X, MessageSquare, Calendar, Clock, LayoutGrid, List } from 'lucide-react';
-import { mockLeads, mockCustomers } from '../services/mockData';
 import { Lead, LeadStatus, LeadSource, Customer, CustomerType } from '../types';
 import { LEAD_STATUS_LABELS, LEAD_SOURCE_LABELS } from '../constants';
 import Modal from '../components/Modal';
@@ -9,6 +8,8 @@ import { useToast } from '../contexts/ToastContext';
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, closestCenter, useDroppable } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import { leadsService } from '../services/leadsService';
+import { customersService } from '../services/customersService';
 
 interface LeadsProps {
   onCreateOrder?: (leadId: string) => void;
@@ -145,7 +146,8 @@ const groupLeadsByStatus = (leads: Lead[]) => {
 };
 
 const Leads: React.FC<LeadsProps> = ({ onCreateOrder }) => {
-  const [leads, setLeads] = useState<Lead[]>(mockLeads);
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isConvertModalOpen, setIsConvertModalOpen] = useState(false);
@@ -186,6 +188,24 @@ const Leads: React.FC<LeadsProps> = ({ onCreateOrder }) => {
     address_city: ''
   });
 
+  // Load leads from Supabase
+  useEffect(() => {
+    loadLeads();
+  }, []);
+
+  const loadLeads = async () => {
+    try {
+      setIsLoading(true);
+      const data = await leadsService.getAll();
+      setLeads(data);
+    } catch (error) {
+      console.error('Error loading leads:', error);
+      showToast('שגיאה בטעינת הלידים', 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const groupedLeads = groupLeadsByStatus(leads);
   const statusKeys: LeadStatus[] = ['new', 'contacted', 'in_negotiation', 'quoted', 'converted', 'lost'];
 
@@ -193,7 +213,7 @@ const Leads: React.FC<LeadsProps> = ({ onCreateOrder }) => {
     setActiveId(event.active.id as string);
   };
 
-  const handleDragEnd = (event: DragEndEvent) => {
+  const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
     setActiveId(null);
 
@@ -208,32 +228,39 @@ const Leads: React.FC<LeadsProps> = ({ onCreateOrder }) => {
 
     const oldStatus = lead.status;
 
-    // Update lead status
-    const updatedLeads = leads.map(l => 
-      l.id === leadId ? { ...l, status: newStatus } : l
-    );
-    
-    setLeads(updatedLeads);
-    
-    // Add activity
-    if (oldStatus !== newStatus) {
-      const activity: LeadActivity = {
-        id: Math.random().toString(36).substr(2, 9),
-        type: 'status_change',
-        text: `שינוי סטטוס מ-${LEAD_STATUS_LABELS[oldStatus]} ל-${LEAD_STATUS_LABELS[newStatus]}`,
-        author: 'דני מנהל',
-        created_at: new Date().toISOString(),
-        oldStatus,
-        newStatus
-      };
+    try {
+      // Update lead status in Supabase
+      await leadsService.update(leadId, { status: newStatus });
       
-      setLeadActivities(prev => ({
-        ...prev,
-        [leadId]: [...(prev[leadId] || []), activity]
-      }));
+      // Update local state
+      const updatedLeads = leads.map(l => 
+        l.id === leadId ? { ...l, status: newStatus } : l
+      );
+      setLeads(updatedLeads);
+      
+      // Add activity
+      if (oldStatus !== newStatus) {
+        const activity: LeadActivity = {
+          id: Math.random().toString(36).substr(2, 9),
+          type: 'status_change',
+          text: `שינוי סטטוס מ-${LEAD_STATUS_LABELS[oldStatus]} ל-${LEAD_STATUS_LABELS[newStatus]}`,
+          author: 'דני מנהל',
+          created_at: new Date().toISOString(),
+          oldStatus,
+          newStatus
+        };
+        
+        setLeadActivities(prev => ({
+          ...prev,
+          [leadId]: [...(prev[leadId] || []), activity]
+        }));
+      }
+      
+      showToast(`הליד הועבר ל-${LEAD_STATUS_LABELS[newStatus]}`);
+    } catch (error) {
+      console.error('Error updating lead status:', error);
+      showToast('שגיאה בעדכון סטטוס הליד', 'error');
     }
-    
-    showToast(`הליד הועבר ל-${LEAD_STATUS_LABELS[newStatus]}`);
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
@@ -241,7 +268,7 @@ const Leads: React.FC<LeadsProps> = ({ onCreateOrder }) => {
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!formData.contact_name || !formData.phone) {
@@ -251,37 +278,41 @@ const Leads: React.FC<LeadsProps> = ({ onCreateOrder }) => {
 
     setIsSubmitting(true);
     
-    setTimeout(() => {
+    try {
       if (editingLead) {
         // Update existing lead
-        setLeads(prev => prev.map(lead => 
-          lead.id === editingLead.id 
-            ? { ...lead, ...formData, estimated_quantity: formData.estimated_quantity ? parseInt(formData.estimated_quantity) : undefined }
-            : lead
-        ));
+        await leadsService.update(editingLead.id, {
+          contact_name: formData.contact_name,
+          company_name: formData.company_name || undefined,
+          phone: formData.phone,
+          email: formData.email || undefined,
+          source: formData.source,
+          event_type: formData.event_type || undefined,
+          estimated_quantity: formData.estimated_quantity ? parseInt(formData.estimated_quantity) : undefined,
+          notes: formData.notes || undefined
+        });
         showToast('הליד עודכן בהצלחה');
         setIsEditModalOpen(false);
       } else {
         // Create new lead
-        const newLead: Lead = {
-          id: Math.random().toString(36).substr(2, 9),
+        await leadsService.create({
           contact_name: formData.contact_name,
-          company_name: formData.company_name,
+          company_name: formData.company_name || undefined,
           phone: formData.phone,
-          email: formData.email,
+          email: formData.email || undefined,
           source: formData.source,
           status: 'new',
-          event_type: formData.event_type,
+          event_type: formData.event_type || undefined,
           estimated_quantity: formData.estimated_quantity ? parseInt(formData.estimated_quantity) : undefined,
-          notes: formData.notes,
-          created_at: new Date().toISOString()
-        };
-        setLeads(prev => [newLead, ...prev]);
+          notes: formData.notes || undefined
+        });
         showToast('הליד נוצר בהצלחה');
         setIsAddModalOpen(false);
       }
       
-      setIsSubmitting(false);
+      // Reload leads
+      await loadLeads();
+      
       setEditingLead(null);
       setFormData({
         contact_name: '',
@@ -293,7 +324,12 @@ const Leads: React.FC<LeadsProps> = ({ onCreateOrder }) => {
         estimated_quantity: '',
         notes: ''
       });
-    }, 600);
+    } catch (error) {
+      console.error('Error saving lead:', error);
+      showToast('שגיאה בשמירת הליד', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleEditLead = (lead: Lead) => {
@@ -326,7 +362,7 @@ const Leads: React.FC<LeadsProps> = ({ onCreateOrder }) => {
     setIsConvertModalOpen(true);
   };
 
-  const handleConvertSubmit = (e: React.FormEvent) => {
+  const handleConvertSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!customerFormData.first_name || !customerFormData.phone) {
@@ -339,49 +375,61 @@ const Leads: React.FC<LeadsProps> = ({ onCreateOrder }) => {
       return;
     }
 
-    const newCustomer: Customer = {
-      id: Math.random().toString(36).substr(2, 9),
-      customer_type: customerFormData.customer_type,
-      company_name: customerFormData.company_name,
-      first_name: customerFormData.first_name,
-      last_name: customerFormData.last_name,
-      phone: customerFormData.phone,
-      email: customerFormData.email,
-      address_city: customerFormData.address_city,
-      orders_count: 0,
-      total_purchases: 0,
-      is_active: true,
-      created_at: new Date().toISOString()
-    };
-
-    mockCustomers.push(newCustomer);
-    
-    // Update lead status to converted
-    if (convertingLead) {
-      setLeads(prev => prev.map(lead => 
-        lead.id === convertingLead.id ? { ...lead, status: 'converted' } : lead
-      ));
+    try {
+      // Create customer in Supabase
+      await customersService.create({
+        customer_type: customerFormData.customer_type,
+        company_name: customerFormData.company_name || undefined,
+        first_name: customerFormData.first_name,
+        last_name: customerFormData.last_name || undefined,
+        phone: customerFormData.phone,
+        email: customerFormData.email || undefined,
+        address_city: customerFormData.address_city || undefined,
+        is_active: true
+      });
       
-      // Add activity
-      const activity: LeadActivity = {
-        id: Math.random().toString(36).substr(2, 9),
-        type: 'status_change',
-        text: 'הליד הומר ללקוח',
-        author: 'דני מנהל',
-        created_at: new Date().toISOString(),
-        oldStatus: convertingLead.status,
-        newStatus: 'converted'
-      };
+      // Update lead status to converted
+      if (convertingLead) {
+        await leadsService.update(convertingLead.id, { status: 'converted' });
+        
+        // Update local state
+        setLeads(prev => prev.map(lead => 
+          lead.id === convertingLead.id ? { ...lead, status: 'converted' } : lead
+        ));
       
-      setLeadActivities(prev => ({
-        ...prev,
-        [convertingLead.id]: [...(prev[convertingLead.id] || []), activity]
-      }));
+        // Add activity
+        const activity: LeadActivity = {
+          id: Math.random().toString(36).substr(2, 9),
+          type: 'status_change',
+          text: 'הליד הומר ללקוח',
+          author: 'דני מנהל',
+          created_at: new Date().toISOString(),
+          oldStatus: convertingLead.status,
+          newStatus: 'converted'
+        };
+        
+        setLeadActivities(prev => ({
+          ...prev,
+          [convertingLead.id]: [...(prev[convertingLead.id] || []), activity]
+        }));
+      }
+      
+      showToast('הליד הומר ללקוח בהצלחה');
+      setIsConvertModalOpen(false);
+      setConvertingLead(null);
+      setCustomerFormData({
+        customer_type: 'private',
+        company_name: '',
+        first_name: '',
+        last_name: '',
+        phone: '',
+        email: '',
+        address_city: ''
+      });
+    } catch (error) {
+      console.error('Error converting lead to customer:', error);
+      showToast('שגיאה בהמרת הליד ללקוח', 'error');
     }
-    
-    setIsConvertModalOpen(false);
-    setConvertingLead(null);
-    showToast('הלקוח נוצר והליד עודכן ל-converted');
   };
 
   const handleCreateOrderFromLead = (lead: Lead) => {
@@ -418,6 +466,14 @@ const Leads: React.FC<LeadsProps> = ({ onCreateOrder }) => {
   };
 
   const activeLead = activeId ? leads.find(l => l.id === activeId) : null;
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center py-12">
+        <Loader2 size={32} className="animate-spin text-blue-600" />
+      </div>
+    );
+  }
 
   // Droppable Column Component
   const DroppableColumn: React.FC<{ status: LeadStatus; children: React.ReactNode }> = ({ status, children }) => {

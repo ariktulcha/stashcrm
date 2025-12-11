@@ -1,13 +1,14 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Phone, Mail, MapPin, Plus, Edit, Trash2, Loader2 } from 'lucide-react';
-import { mockSuppliers } from '../services/mockData';
 import { Supplier } from '../types';
 import Modal from '../components/Modal';
 import { useToast } from '../contexts/ToastContext';
+import { suppliersService } from '../services/suppliersService';
 
 const Suppliers: React.FC = () => {
-  const [suppliers, setSuppliers] = useState<Supplier[]>(mockSuppliers);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -16,6 +17,24 @@ const Suppliers: React.FC = () => {
   const { showToast } = useToast();
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Load suppliers from Supabase
+  useEffect(() => {
+    loadSuppliers();
+  }, []);
+
+  const loadSuppliers = async () => {
+    try {
+      setIsLoading(true);
+      const data = await suppliersService.getAll();
+      setSuppliers(data);
+    } catch (error) {
+      console.error('Error loading suppliers:', error);
+      showToast('שגיאה בטעינת הספקים', 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
   const [formData, setFormData] = useState({
     name: '',
     country: '',
@@ -25,7 +44,7 @@ const Suppliers: React.FC = () => {
     lead_time_days: ''
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!formData.name || !formData.contact_name || !formData.phone) {
@@ -34,39 +53,34 @@ const Suppliers: React.FC = () => {
     }
 
     setIsSubmitting(true);
-    setTimeout(() => {
+    try {
       if (editingSupplier) {
-        setSuppliers(prev => prev.map(supplier => 
-          supplier.id === editingSupplier.id 
-            ? {
-                ...supplier,
-                name: formData.name,
-                country: formData.country,
-                contact_name: formData.contact_name,
-                email: formData.email,
-                phone: formData.phone,
-                lead_time_days: parseInt(formData.lead_time_days) || 0
-              }
-            : supplier
-        ));
-        showToast('הספק עודכן בהצלחה');
-        setIsEditModalOpen(false);
-      } else {
-        const newSupplier: Supplier = {
-          id: Math.random().toString(36).substr(2, 9),
+        await suppliersService.update(editingSupplier.id, {
           name: formData.name,
           country: formData.country,
           contact_name: formData.contact_name,
           email: formData.email,
           phone: formData.phone,
           lead_time_days: parseInt(formData.lead_time_days) || 0
-        };
-        setSuppliers(prev => [newSupplier, ...prev]);
+        });
+        showToast('הספק עודכן בהצלחה');
+        setIsEditModalOpen(false);
+      } else {
+        await suppliersService.create({
+          name: formData.name,
+          country: formData.country,
+          contact_name: formData.contact_name,
+          email: formData.email,
+          phone: formData.phone,
+          lead_time_days: parseInt(formData.lead_time_days) || 0
+        });
         showToast('הספק נוסף בהצלחה');
         setIsAddModalOpen(false);
       }
       
-      setIsSubmitting(false);
+      // Reload suppliers
+      await loadSuppliers();
+      
       setEditingSupplier(null);
       setFormData({
         name: '',
@@ -76,7 +90,12 @@ const Suppliers: React.FC = () => {
         phone: '',
         lead_time_days: ''
       });
-    }, 500);
+    } catch (error) {
+      console.error('Error saving supplier:', error);
+      showToast('שגיאה בשמירת הספק', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleEditSupplier = (supplier: Supplier) => {
@@ -97,13 +116,28 @@ const Suppliers: React.FC = () => {
     setIsDeleteModalOpen(true);
   };
 
-  const confirmDeleteSupplier = () => {
+  const confirmDeleteSupplier = async () => {
     if (!deletingSupplier) return;
-    setSuppliers(prev => prev.filter(supplier => supplier.id !== deletingSupplier.id));
-    showToast('הספק נמחק בהצלחה');
-    setIsDeleteModalOpen(false);
-    setDeletingSupplier(null);
+    try {
+      await suppliersService.delete(deletingSupplier.id);
+      showToast('הספק נמחק בהצלחה');
+      setIsDeleteModalOpen(false);
+      setDeletingSupplier(null);
+      // Reload suppliers
+      await loadSuppliers();
+    } catch (error) {
+      console.error('Error deleting supplier:', error);
+      showToast('שגיאה במחיקת הספק', 'error');
+    }
   };
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center py-12">
+        <Loader2 size={32} className="animate-spin text-blue-600" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

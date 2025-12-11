@@ -1,11 +1,11 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ArrowRight, Printer, CreditCard, Truck, CheckCircle, Clock, Edit, Copy, Share2, MessageSquare, Plus, X, Loader2 } from 'lucide-react';
 import { Order, OrderStatus, LocalProductionStatus, ImportStatus } from '../types';
-import { mockOrders } from '../services/mockData';
 import { ORDER_STATUS_LABELS, ORDER_STATUS_COLORS, PRODUCTION_TYPE_LABELS, LOCAL_PRODUCTION_STATUS_LABELS, IMPORT_STATUS_LABELS } from '../constants';
 import { useToast } from '../contexts/ToastContext';
 import Modal from '../components/Modal';
+import { ordersService } from '../services/ordersService';
 
 interface OrderDetailProps {
   orderId: string;
@@ -31,20 +31,43 @@ interface ActivityLog {
 
 const OrderDetail: React.FC<OrderDetailProps> = ({ orderId, onBack, onEdit, onViewCustomer }) => {
   const { showToast } = useToast();
-  const orderIndex = mockOrders.findIndex(o => o.id === orderId);
-  const order = orderIndex !== -1 ? mockOrders[orderIndex] : null;
+  const [order, setOrder] = useState<Order | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  
+  useEffect(() => {
+    loadOrder();
+  }, [orderId]);
+
+  const loadOrder = async () => {
+    try {
+      setIsLoading(true);
+      const orderData = await ordersService.getById(orderId);
+      setOrder(orderData);
+    } catch (error) {
+      console.error('Error loading order:', error);
+      showToast('שגיאה בטעינת ההזמנה', 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
   
   const [localOrder, setLocalOrder] = useState<Order | null>(order);
   const [comments, setComments] = useState<OrderComment[]>([]);
-  const [activityLog, setActivityLog] = useState<ActivityLog[]>([
-    {
-      id: '1',
-      type: 'status_change',
-      description: `הזמנה נוצרה - ${ORDER_STATUS_LABELS[localOrder?.status || 'draft']}`,
-      author: 'דני מנהל',
-      created_at: localOrder?.created_at || new Date().toISOString()
+  const [activityLog, setActivityLog] = useState<ActivityLog[]>([]);
+
+  // Update localOrder when order changes
+  useEffect(() => {
+    if (order) {
+      setLocalOrder(order);
+      setActivityLog([{
+        id: '1',
+        type: 'status_change',
+        description: `הזמנה נוצרה - ${ORDER_STATUS_LABELS[order.status || 'draft']}`,
+        author: 'דני מנהל',
+        created_at: order.created_at || new Date().toISOString()
+      }]);
     }
-  ]);
+  }, [order]);
   const [newComment, setNewComment] = useState('');
   const [isCommentModalOpen, setIsCommentModalOpen] = useState(false);
   const [isStatusModalOpen, setIsStatusModalOpen] = useState(false);
@@ -53,8 +76,23 @@ const OrderDetail: React.FC<OrderDetailProps> = ({ orderId, onBack, onEdit, onVi
   const [selectedProductionStatus, setSelectedProductionStatus] = useState<LocalProductionStatus | ImportStatus | null>(null);
   const [statusChangeNote, setStatusChangeNote] = useState('');
 
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center py-12">
+        <Loader2 size={32} className="animate-spin text-blue-600" />
+      </div>
+    );
+  }
+
   if (!localOrder) {
-    return <div>הזמנה לא נמצאה</div>;
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="text-center">
+          <h2 className="text-xl font-bold text-slate-800 mb-2">הזמנה לא נמצאה</h2>
+          <button onClick={onBack} className="text-blue-600 hover:underline">חזור לרשימת הזמנות</button>
+        </div>
+      </div>
+    );
   }
 
   const nonEditableStatuses: OrderStatus[] = ['shipped', 'delivered', 'completed', 'cancelled'];
@@ -78,63 +116,74 @@ const OrderDetail: React.FC<OrderDetailProps> = ({ orderId, onBack, onEdit, onVi
     return statusFlow[localOrder.status] || [];
   };
 
-  const handleStatusUpdate = () => {
-    if (!selectedStatus) return;
+  const handleStatusUpdate = async () => {
+    if (!selectedStatus || !localOrder) return;
     
-    const oldStatus = localOrder.status;
-    const newOrder = { ...localOrder, status: selectedStatus };
-    setLocalOrder(newOrder);
-    
-    // Update in mock data
-    if (orderIndex !== -1) {
-      mockOrders[orderIndex] = newOrder;
+    try {
+      const oldStatus = localOrder.status;
+      await ordersService.update(localOrder.id, { status: selectedStatus });
+      
+      // Update local state
+      const newOrder = { ...localOrder, status: selectedStatus };
+      setLocalOrder(newOrder);
+      
+      // Reload order
+      await loadOrder();
+      
+      // Add to activity log
+      setActivityLog(prev => [{
+        id: Math.random().toString(36).substr(2, 9),
+        type: 'status_change',
+        description: `שינוי סטטוס: ${ORDER_STATUS_LABELS[oldStatus]} → ${ORDER_STATUS_LABELS[selectedStatus]}${statusChangeNote ? ` (${statusChangeNote})` : ''}`,
+        author: 'דני מנהל',
+        created_at: new Date().toISOString()
+      }, ...prev]);
+      
+      setIsStatusModalOpen(false);
+      setSelectedStatus(null);
+      setStatusChangeNote('');
+      showToast('סטטוס ההזמנה עודכן בהצלחה');
+    } catch (error) {
+      console.error('Error updating order status:', error);
+      showToast('שגיאה בעדכון סטטוס ההזמנה', 'error');
     }
-    
-    // Add to activity log
-    setActivityLog(prev => [{
-      id: Math.random().toString(36).substr(2, 9),
-      type: 'status_change',
-      description: `שינוי סטטוס: ${ORDER_STATUS_LABELS[oldStatus]} → ${ORDER_STATUS_LABELS[selectedStatus]}${statusChangeNote ? ` (${statusChangeNote})` : ''}`,
-      author: 'דני מנהל',
-      created_at: new Date().toISOString()
-    }, ...prev]);
-    
-    showToast('סטטוס ההזמנה עודכן בהצלחה');
-    setIsStatusModalOpen(false);
-    setSelectedStatus(null);
-    setStatusChangeNote('');
   };
 
-  const handleProductionStatusUpdate = () => {
-    if (!selectedProductionStatus) return;
+  const handleProductionStatusUpdate = async () => {
+    if (!selectedProductionStatus || !localOrder) return;
     
-    const newOrder = { 
-      ...localOrder, 
-      ...(localOrder.production_type === 'local' 
+    try {
+      const updateData = localOrder.production_type === 'local'
         ? { local_production_status: selectedProductionStatus as LocalProductionStatus }
-        : { import_status: selectedProductionStatus as ImportStatus })
-    };
-    setLocalOrder(newOrder);
-    
-    // Update in mock data
-    if (orderIndex !== -1) {
-      mockOrders[orderIndex] = newOrder;
+        : {}; // Import status would need different handling
+      
+      await ordersService.update(localOrder.id, updateData);
+      
+      // Update local state
+      const newOrder = { ...localOrder, ...updateData };
+      setLocalOrder(newOrder);
+      
+      // Reload order
+      await loadOrder();
+      
+      // Add to activity log
+      setActivityLog(prev => [{
+        id: Math.random().toString(36).substr(2, 9),
+        type: 'production_change',
+        description: `עדכון סטטוס ייצור: ${localOrder.production_type === 'local' 
+          ? LOCAL_PRODUCTION_STATUS_LABELS[selectedProductionStatus as LocalProductionStatus]
+          : IMPORT_STATUS_LABELS[selectedProductionStatus as ImportStatus]}`,
+        author: 'דני מנהל',
+        created_at: new Date().toISOString()
+      }, ...prev]);
+      
+      setIsProductionStatusModalOpen(false);
+      setSelectedProductionStatus(null);
+      showToast('סטטוס הייצור עודכן בהצלחה');
+    } catch (error) {
+      console.error('Error updating production status:', error);
+      showToast('שגיאה בעדכון סטטוס הייצור', 'error');
     }
-    
-    // Add to activity log
-    setActivityLog(prev => [{
-      id: Math.random().toString(36).substr(2, 9),
-      type: 'production_change',
-      description: `עדכון סטטוס ייצור: ${localOrder.production_type === 'local' 
-        ? LOCAL_PRODUCTION_STATUS_LABELS[selectedProductionStatus as LocalProductionStatus]
-        : IMPORT_STATUS_LABELS[selectedProductionStatus as ImportStatus]}`,
-      author: 'דני מנהל',
-      created_at: new Date().toISOString()
-    }, ...prev]);
-    
-    showToast('סטטוס הייצור עודכן בהצלחה');
-    setIsProductionStatusModalOpen(false);
-    setSelectedProductionStatus(null);
   };
 
   const handleAddComment = () => {

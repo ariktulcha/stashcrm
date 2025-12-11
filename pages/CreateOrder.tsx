@@ -1,11 +1,13 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { ArrowRight, Check, ChevronLeft, ChevronRight, User, Calendar, Package, Upload, FileText, Trash2, Plus, X, Search, Loader2 } from 'lucide-react';
-import { mockProducts, mockCustomers } from '../services/mockData';
 import { Product, Customer, CustomerType, ShippingType } from '../types';
 import { useToast } from '../contexts/ToastContext';
 import Modal from '../components/Modal';
 import { generateOrderNumber } from '../services/orderUtils';
+import { productsService } from '../services/productsService';
+import { customersService } from '../services/customersService';
+import { ordersService } from '../services/ordersService';
 
 interface CreateOrderProps {
   onCancel: () => void;
@@ -41,7 +43,34 @@ const CreateOrder: React.FC<CreateOrderProps> = ({ onCancel }) => {
   const [customerSearchTerm, setCustomerSearchTerm] = useState('');
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
   const [isCreateCustomerModalOpen, setIsCreateCustomerModalOpen] = useState(false);
-  const [orderNumber] = useState(generateOrderNumber());
+  const [orderNumber, setOrderNumber] = useState<string>('');
+  const [products, setProducts] = useState<Product[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Load data and generate order number
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const loadData = async () => {
+    try {
+      setIsLoading(true);
+      const [productsData, customersData, orderNum] = await Promise.all([
+        productsService.getAll(),
+        customersService.getAll(),
+        generateOrderNumber()
+      ]);
+      setProducts(productsData);
+      setCustomers(customersData);
+      setOrderNumber(orderNum);
+    } catch (error) {
+      console.error('Error loading data:', error);
+      showToast('שגיאה בטעינת הנתונים', 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
   
   const [orderDetails, setOrderDetails] = useState({
     productionType: 'local' as 'local' | 'import',
@@ -71,7 +100,7 @@ const CreateOrder: React.FC<CreateOrderProps> = ({ onCancel }) => {
   });
 
   // Filter customers based on search
-  const filteredCustomers = mockCustomers.filter(c => {
+  const filteredCustomers = customers.filter(c => {
     const searchLower = customerSearchTerm.toLowerCase();
     return (
       c.first_name?.toLowerCase().includes(searchLower) ||
@@ -95,7 +124,7 @@ const CreateOrder: React.FC<CreateOrderProps> = ({ onCancel }) => {
   };
 
   // Handle create customer
-  const handleCreateCustomer = (e: React.FormEvent) => {
+  const handleCreateCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!customerFormData.first_name || !customerFormData.phone) {
@@ -108,34 +137,37 @@ const CreateOrder: React.FC<CreateOrderProps> = ({ onCancel }) => {
       return;
     }
 
-    const newCustomer: Customer = {
-      id: Math.random().toString(36).substr(2, 9),
-      customer_type: customerFormData.customer_type,
-      company_name: customerFormData.company_name,
-      first_name: customerFormData.first_name,
-      last_name: customerFormData.last_name,
-      phone: customerFormData.phone,
-      email: customerFormData.email,
-      address_city: customerFormData.address_city,
-      orders_count: 0,
-      total_purchases: 0,
-      is_active: true,
-      created_at: new Date().toISOString()
-    };
+    try {
+      const newCustomer = await customersService.create({
+        customer_type: customerFormData.customer_type,
+        company_name: customerFormData.company_name || undefined,
+        first_name: customerFormData.first_name,
+        last_name: customerFormData.last_name || undefined,
+        phone: customerFormData.phone,
+        email: customerFormData.email || undefined,
+        address_city: customerFormData.address_city || undefined,
+        is_active: true
+      });
 
-    mockCustomers.push(newCustomer);
-    handleCustomerSelect(newCustomer);
-    setIsCreateCustomerModalOpen(false);
-    setCustomerFormData({
-      customer_type: 'private',
-      company_name: '',
-      first_name: '',
-      last_name: '',
-      phone: '',
-      email: '',
-      address_city: ''
-    });
-    showToast('הלקוח נוצר ונבחר בהצלחה');
+      // Reload customers
+      await loadData();
+      
+      handleCustomerSelect(newCustomer);
+      setIsCreateCustomerModalOpen(false);
+      setCustomerFormData({
+        customer_type: 'private',
+        company_name: '',
+        first_name: '',
+        last_name: '',
+        phone: '',
+        email: '',
+        address_city: ''
+      });
+      showToast('הלקוח נוצר ונבחר בהצלחה');
+    } catch (error) {
+      console.error('Error creating customer:', error);
+      showToast('שגיאה ביצירת הלקוח', 'error');
+    }
   };
 
   // Handle file upload
@@ -235,7 +267,7 @@ const CreateOrder: React.FC<CreateOrderProps> = ({ onCancel }) => {
   const prevStep = () => setCurrentStep(prev => Math.max(prev - 1, 1));
 
   const addItem = () => {
-    const defaultProduct = mockProducts[0];
+    const defaultProduct = products[0];
     const newItem: OrderItem = {
       id: Math.random().toString(36).substr(2, 9),
       product: defaultProduct,
@@ -252,7 +284,7 @@ const CreateOrder: React.FC<CreateOrderProps> = ({ onCancel }) => {
     setItems(items.map(item => {
       if (item.id === id) {
         if (field === 'productId') {
-          const product = mockProducts.find(p => p.id === value);
+          const product = products.find(p => p.id === value);
           return product ? { ...item, product, priceOverride: undefined } : item;
         }
         return { ...item, [field]: value };
@@ -261,14 +293,63 @@ const CreateOrder: React.FC<CreateOrderProps> = ({ onCancel }) => {
     }));
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
+    if (!selectedCustomer) {
+      showToast('נא לבחור לקוח', 'error');
+      return;
+    }
+
+    if (items.length === 0) {
+      showToast('נא להוסיף לפחות מוצר אחד', 'error');
+      return;
+    }
+
     setIsSubmitting(true);
-    // Simulate API
-    setTimeout(() => {
+    
+    try {
+      const orderItems = items.map(item => ({
+        product_name: item.product.name,
+        quantity: item.quantity,
+        unit_price: item.priceOverride || item.product.base_price,
+        total: (item.priceOverride || item.product.base_price) * item.quantity
+      }));
+
+      await ordersService.create({
+        order_number: orderNumber,
+        customer_id: selectedCustomer.id,
+        customer_name: selectedCustomer.customer_type === 'business' 
+          ? selectedCustomer.company_name || '' 
+          : `${selectedCustomer.first_name} ${selectedCustomer.last_name}`.trim(),
+        status: 'draft',
+        production_type: orderDetails.productionType,
+        event_name: orderDetails.eventName || undefined,
+        event_date: orderDetails.eventDate || undefined,
+        subtotal: subtotal,
+        tax_amount: tax,
+        total_amount: total,
+        payment_status: 'pending',
+        shipping_type: orderDetails.shippingType,
+        deadline: orderDetails.deadline || undefined,
+        local_production_status: orderDetails.productionType === 'local' ? 'queued' : undefined
+      }, orderItems);
+
       showToast('ההזמנה נוצרה בהצלחה!');
       onCancel(); // Redirect back to orders list
-    }, 1000);
+    } catch (error) {
+      console.error('Error creating order:', error);
+      showToast('שגיאה ביצירת ההזמנה', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center py-12">
+        <Loader2 size={32} className="animate-spin text-blue-600" />
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-4xl mx-auto h-full flex flex-col">
@@ -477,7 +558,7 @@ const CreateOrder: React.FC<CreateOrderProps> = ({ onCancel }) => {
                         onChange={(e) => updateItem(item.id, 'productId', e.target.value)}
                         className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm touch-manipulation"
                       >
-                        {mockProducts.map(p => (
+                        {products.map(p => (
                           <option key={p.id} value={p.id}>{p.name}</option>
                         ))}
                       </select>

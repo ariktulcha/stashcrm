@@ -1,11 +1,13 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { ArrowRight, Check, ChevronLeft, ChevronRight, User, Calendar, Package, Upload, FileText, Trash2, Plus, X, Search, Loader2, AlertCircle } from 'lucide-react';
-import { mockProducts, mockCustomers, mockOrders } from '../services/mockData';
 import { Product, Customer, CustomerType, ShippingType, Order, OrderStatus } from '../types';
 import { useToast } from '../contexts/ToastContext';
 import Modal from '../components/Modal';
 import { ORDER_STATUS_LABELS } from '../constants';
+import { ordersService } from '../services/ordersService';
+import { productsService } from '../services/productsService';
+import { customersService } from '../services/customersService';
 
 interface EditOrderProps {
   orderId: string;
@@ -36,8 +38,42 @@ const steps = [
 
 const EditOrder: React.FC<EditOrderProps> = ({ orderId, onCancel, onSave }) => {
   const { showToast } = useToast();
-  const order = mockOrders.find(o => o.id === orderId);
+  const [order, setOrder] = useState<Order | null>(null);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    loadData();
+  }, [orderId]);
+
+  const loadData = async () => {
+    try {
+      setIsLoading(true);
+      const [orderData, productsData, customersData] = await Promise.all([
+        ordersService.getById(orderId),
+        productsService.getAll(),
+        customersService.getAll()
+      ]);
+      setOrder(orderData);
+      setProducts(productsData);
+      setCustomers(customersData);
+    } catch (error) {
+      console.error('Error loading order data:', error);
+      showToast('שגיאה בטעינת הנתונים', 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
   
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center py-12">
+        <Loader2 size={32} className="animate-spin text-blue-600" />
+      </div>
+    );
+  }
+
   if (!order) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -55,34 +91,61 @@ const EditOrder: React.FC<EditOrderProps> = ({ orderId, onCancel, onSave }) => {
   const canEdit = !nonEditableStatuses.includes(order.status);
 
   const [currentStep, setCurrentStep] = useState(1);
-  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(
-    mockCustomers.find(c => c.id === order.customer_id) || null
-  );
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+
+  // Set selected customer when order loads
+  useEffect(() => {
+    if (order && customers.length > 0) {
+      const customer = customers.find(c => c.id === order.customer_id);
+      setSelectedCustomer(customer || null);
+    }
+  }, [order, customers]);
   const [customerSearchTerm, setCustomerSearchTerm] = useState('');
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
   const [isCreateCustomerModalOpen, setIsCreateCustomerModalOpen] = useState(false);
   
   const [orderDetails, setOrderDetails] = useState({
-    productionType: order.production_type,
-    eventName: order.event_name || '',
-    eventDate: order.event_date || '',
-    deadline: order.deadline || '',
-    shippingType: order.shipping_type,
+    productionType: 'local' as 'local' | 'import',
+    eventName: '',
+    eventDate: '',
+    deadline: '',
+    shippingType: 'pickup' as ShippingType,
     shippingAddress: '',
     notes: ''
   });
+
+  // Set order details when order loads
+  useEffect(() => {
+    if (order) {
+      setOrderDetails({
+        productionType: order.production_type,
+        eventName: order.event_name || '',
+        eventDate: order.event_date || '',
+        deadline: order.deadline || '',
+        shippingType: order.shipping_type,
+        shippingAddress: '',
+        notes: ''
+      });
+    }
+  }, [order]);
   
-  const [items, setItems] = useState<OrderItem[]>(
-    order.items?.map(item => {
-      const product = mockProducts.find(p => p.name === item.product_name) || mockProducts[0];
-      return {
-        id: item.id,
-        product,
-        quantity: item.quantity,
-        priceOverride: item.unit_price !== product.base_price ? item.unit_price : undefined
-      };
-    }) || []
-  );
+  const [items, setItems] = useState<OrderItem[]>([]);
+
+  // Set items when order and products load
+  useEffect(() => {
+    if (order && products.length > 0) {
+      const orderItems = order.items?.map(item => {
+        const product = products.find(p => p.name === item.product_name) || products[0];
+        return {
+          id: item.id,
+          product,
+          quantity: item.quantity,
+          priceOverride: item.unit_price !== product.base_price ? item.unit_price : undefined
+        };
+      }) || [];
+      setItems(orderItems);
+    }
+  }, [order, products]);
   
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [graphicsNotes, setGraphicsNotes] = useState('');
@@ -100,7 +163,7 @@ const EditOrder: React.FC<EditOrderProps> = ({ orderId, onCancel, onSave }) => {
   });
 
   // Filter customers based on search
-  const filteredCustomers = mockCustomers.filter(c => {
+  const filteredCustomers = customers.filter(c => {
     const searchLower = customerSearchTerm.toLowerCase();
     return (
       c.first_name?.toLowerCase().includes(searchLower) ||
@@ -124,7 +187,7 @@ const EditOrder: React.FC<EditOrderProps> = ({ orderId, onCancel, onSave }) => {
   };
 
   // Handle create customer
-  const handleCreateCustomer = (e: React.FormEvent) => {
+  const handleCreateCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!customerFormData.first_name || !customerFormData.phone) {
@@ -137,34 +200,38 @@ const EditOrder: React.FC<EditOrderProps> = ({ orderId, onCancel, onSave }) => {
       return;
     }
 
-    const newCustomer: Customer = {
-      id: Math.random().toString(36).substr(2, 9),
-      customer_type: customerFormData.customer_type,
-      company_name: customerFormData.company_name,
-      first_name: customerFormData.first_name,
-      last_name: customerFormData.last_name,
-      phone: customerFormData.phone,
-      email: customerFormData.email,
-      address_city: customerFormData.address_city,
-      orders_count: 0,
-      total_purchases: 0,
-      is_active: true,
-      created_at: new Date().toISOString()
-    };
+    try {
+      const newCustomer = await customersService.create({
+        customer_type: customerFormData.customer_type,
+        company_name: customerFormData.company_name || undefined,
+        first_name: customerFormData.first_name,
+        last_name: customerFormData.last_name || undefined,
+        phone: customerFormData.phone,
+        email: customerFormData.email || undefined,
+        address_city: customerFormData.address_city || undefined,
+        is_active: true
+      });
 
-    mockCustomers.push(newCustomer);
-    handleCustomerSelect(newCustomer);
-    setIsCreateCustomerModalOpen(false);
-    setCustomerFormData({
-      customer_type: 'private',
-      company_name: '',
-      first_name: '',
-      last_name: '',
-      phone: '',
-      email: '',
-      address_city: ''
-    });
-    showToast('הלקוח נוצר ונבחר בהצלחה');
+      // Reload customers
+      const customersData = await customersService.getAll();
+      setCustomers(customersData);
+      
+      handleCustomerSelect(newCustomer);
+      setIsCreateCustomerModalOpen(false);
+      setCustomerFormData({
+        customer_type: 'private',
+        company_name: '',
+        first_name: '',
+        last_name: '',
+        phone: '',
+        email: '',
+        address_city: ''
+      });
+      showToast('הלקוח נוצר ונבחר בהצלחה');
+    } catch (error) {
+      console.error('Error creating customer:', error);
+      showToast('שגיאה ביצירת הלקוח', 'error');
+    }
   };
 
   // Handle file upload
@@ -260,7 +327,7 @@ const EditOrder: React.FC<EditOrderProps> = ({ orderId, onCancel, onSave }) => {
   const prevStep = () => setCurrentStep(prev => Math.max(prev - 1, 1));
 
   const addItem = () => {
-    const defaultProduct = mockProducts[0];
+    const defaultProduct = products[0];
     const newItem: OrderItem = {
       id: Math.random().toString(36).substr(2, 9),
       product: defaultProduct,
@@ -277,7 +344,7 @@ const EditOrder: React.FC<EditOrderProps> = ({ orderId, onCancel, onSave }) => {
     setItems(items.map(item => {
       if (item.id === id) {
         if (field === 'productId') {
-          const product = mockProducts.find(p => p.id === value);
+          const product = products.find(p => p.id === value);
           return product ? { ...item, product, priceOverride: undefined } : item;
         }
         return { ...item, [field]: value };
@@ -286,43 +353,50 @@ const EditOrder: React.FC<EditOrderProps> = ({ orderId, onCancel, onSave }) => {
     }));
   };
 
-  const handleSubmit = () => {
-    if (!canEdit) {
+  const handleSubmit = async () => {
+    if (!canEdit || !order) {
       showToast('לא ניתן לערוך הזמנה במצב זה', 'error');
       return;
     }
 
+    if (!selectedCustomer) {
+      showToast('נא לבחור לקוח', 'error');
+      return;
+    }
+
     setIsSubmitting(true);
-    setTimeout(() => {
-      // Update order in mock data
-      const orderIndex = mockOrders.findIndex(o => o.id === orderId);
-      if (orderIndex !== -1) {
-        mockOrders[orderIndex] = {
-          ...mockOrders[orderIndex],
-          customer_id: selectedCustomer?.id || order.customer_id,
-          customer_name: selectedCustomer 
-            ? (selectedCustomer.customer_type === 'business' ? selectedCustomer.company_name || '' : `${selectedCustomer.first_name} ${selectedCustomer.last_name}`)
-            : order.customer_name,
-          production_type: orderDetails.productionType,
-          event_name: orderDetails.eventName,
-          event_date: orderDetails.eventDate,
-          deadline: orderDetails.deadline,
-          shipping_type: orderDetails.shippingType,
-          subtotal,
-          tax_amount: tax,
-          total_amount: total,
-          items: items.map(item => ({
-            id: item.id,
-            product_name: item.product.name,
-            quantity: item.quantity,
-            unit_price: item.priceOverride || item.product.base_price,
-            total: (item.priceOverride || item.product.base_price) * item.quantity
-          }))
-        };
-      }
+    
+    try {
+      const orderItems = items.map(item => ({
+        product_name: item.product.name,
+        quantity: item.quantity,
+        unit_price: item.priceOverride || item.product.base_price,
+        total: (item.priceOverride || item.product.base_price) * item.quantity
+      }));
+
+      await ordersService.update(orderId, {
+        customer_id: selectedCustomer.id,
+        customer_name: selectedCustomer.customer_type === 'business' 
+          ? selectedCustomer.company_name || '' 
+          : `${selectedCustomer.first_name} ${selectedCustomer.last_name}`.trim(),
+        production_type: orderDetails.productionType,
+        event_name: orderDetails.eventName || undefined,
+        event_date: orderDetails.eventDate || undefined,
+        deadline: orderDetails.deadline || undefined,
+        shipping_type: orderDetails.shippingType,
+        subtotal,
+        tax_amount: tax,
+        total_amount: total
+      }, orderItems);
+
       showToast('ההזמנה עודכנה בהצלחה!');
       onSave();
-    }, 1000);
+    } catch (error) {
+      console.error('Error updating order:', error);
+      showToast('שגיאה בעדכון ההזמנה', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   if (!canEdit) {
@@ -544,7 +618,7 @@ const EditOrder: React.FC<EditOrderProps> = ({ orderId, onCancel, onSave }) => {
                         onChange={(e) => updateItem(item.id, 'productId', e.target.value)}
                         className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm touch-manipulation"
                       >
-                        {mockProducts.map(p => (
+                        {products.map(p => (
                           <option key={p.id} value={p.id}>{p.name}</option>
                         ))}
                       </select>

@@ -1,12 +1,43 @@
 
-import React, { useMemo } from 'react';
-import { ShoppingCart, Users, Factory, Wallet, ArrowUpRight, AlertCircle } from 'lucide-react';
+import React, { useMemo, useState, useEffect } from 'react';
+import { ShoppingCart, Users, Factory, Wallet, ArrowUpRight, AlertCircle, Loader2 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import StatCard from '../components/StatCard';
-import { mockOrders, mockLeads, mockTasks } from '../services/mockData';
 import { ORDER_STATUS_COLORS, ORDER_STATUS_LABELS } from '../constants';
+import { ordersService } from '../services/ordersService';
+import { leadsService } from '../services/leadsService';
+import { tasksService } from '../services/tasksService';
+import { Order, Lead, Task } from '../types';
 
 const Dashboard: React.FC = () => {
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Load data from Supabase
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const loadData = async () => {
+    try {
+      setIsLoading(true);
+      const [ordersData, leadsData, tasksData] = await Promise.all([
+        ordersService.getAll(),
+        leadsService.getAll(),
+        tasksService.getAll()
+      ]);
+      setOrders(ordersData);
+      setLeads(leadsData);
+      setTasks(tasksData);
+    } catch (error) {
+      console.error('Error loading dashboard data:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // Calculate real statistics
   const stats = useMemo(() => {
     const now = new Date();
@@ -15,19 +46,19 @@ const Dashboard: React.FC = () => {
     const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     
     // Open orders (not completed/cancelled)
-    const openOrders = mockOrders.filter(o => !['completed', 'cancelled'].includes(o.status));
+    const openOrders = orders.filter(o => !['completed', 'cancelled'].includes(o.status));
     
     // New leads (last 7 days)
-    const newLeads = mockLeads.filter(l => {
+    const newLeads = leads.filter(l => {
       const leadDate = new Date(l.created_at);
       return leadDate >= sevenDaysAgo;
     });
     
     // Orders in production
-    const inProduction = mockOrders.filter(o => o.status === 'in_production');
+    const inProduction = orders.filter(o => o.status === 'in_production');
     
     // Monthly revenue (current month)
-    const monthlyRevenue = mockOrders
+    const monthlyRevenue = orders
       .filter(o => {
         const orderDate = new Date(o.created_at);
         return orderDate.getMonth() === currentMonth && 
@@ -39,7 +70,7 @@ const Dashboard: React.FC = () => {
     // Previous month revenue for comparison
     const prevMonth = currentMonth === 0 ? 11 : currentMonth - 1;
     const prevYear = currentMonth === 0 ? currentYear - 1 : currentYear;
-    const prevMonthRevenue = mockOrders
+    const prevMonthRevenue = orders
       .filter(o => {
         const orderDate = new Date(o.created_at);
         return orderDate.getMonth() === prevMonth && 
@@ -59,7 +90,7 @@ const Dashboard: React.FC = () => {
       monthlyRevenue,
       revenueGrowth: parseFloat(revenueGrowth)
     };
-  }, []);
+  }, [orders, leads]);
 
   // Calculate monthly revenue data for chart
   const monthlyData = useMemo(() => {
@@ -68,7 +99,7 @@ const Dashboard: React.FC = () => {
     const currentYear = now.getFullYear();
     
     return months.map((monthName, index) => {
-      const revenue = mockOrders
+      const revenue = orders
         .filter(o => {
           const orderDate = new Date(o.created_at);
           return orderDate.getMonth() === index && 
@@ -79,12 +110,12 @@ const Dashboard: React.FC = () => {
       
       return { name: monthName, amount: revenue };
     }).slice(0, 6); // Last 6 months
-  }, []);
+  }, [orders]);
 
   // Orders by status for pie chart
   const ordersByStatus = useMemo(() => {
     const statusCounts: Record<string, number> = {};
-    mockOrders.forEach(order => {
+    orders.forEach(order => {
       statusCounts[order.status] = (statusCounts[order.status] || 0) + 1;
     });
     
@@ -93,7 +124,7 @@ const Dashboard: React.FC = () => {
       value: count,
       color: ORDER_STATUS_COLORS[status as keyof typeof ORDER_STATUS_COLORS].split(' ')[0].replace('bg-', '')
     }));
-  }, []);
+  }, [orders]);
 
   // Alerts
   const alerts = useMemo(() => {
@@ -102,7 +133,7 @@ const Dashboard: React.FC = () => {
     // Deadline alerts (orders with deadline in next 3 days)
     const threeDaysFromNow = new Date();
     threeDaysFromNow.setDate(threeDaysFromNow.getDate() + 3);
-    const urgentDeadlines = mockOrders.filter(o => {
+    const urgentDeadlines = orders.filter(o => {
       if (!o.deadline) return false;
       const deadline = new Date(o.deadline);
       return deadline <= threeDaysFromNow && deadline >= new Date() && !['completed', 'cancelled'].includes(o.status);
@@ -116,7 +147,7 @@ const Dashboard: React.FC = () => {
     });
     
     // Urgent tasks
-    const urgentTasks = mockTasks.filter(t => 
+    const urgentTasks = tasks.filter(t => 
       t.priority === 'urgent' && t.status !== 'completed'
     );
     urgentTasks.forEach(t => {
@@ -127,9 +158,17 @@ const Dashboard: React.FC = () => {
     });
     
     return alertList.slice(0, 5); // Show max 5 alerts
-  }, []);
+  }, [orders, tasks]);
 
   const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'];
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center py-12">
+        <Loader2 size={32} className="animate-spin text-blue-600" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -250,7 +289,7 @@ const Dashboard: React.FC = () => {
             </button>
           </div>
           <div className="space-y-3 sm:space-y-4">
-            {mockOrders.slice(0, 4).map(order => (
+            {orders.slice(0, 4).map(order => (
               <div key={order.id} className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-900 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">
                 <div className="flex-1 min-w-0 pr-2">
                   <div className="font-medium text-slate-800 dark:text-slate-200 truncate text-sm sm:text-base">{order.customer_name}</div>

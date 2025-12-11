@@ -1,10 +1,11 @@
 
-import React, { useMemo } from 'react';
-import { ArrowRight, Edit, Mail, Phone, MapPin, ShoppingCart, TrendingUp, Calendar } from 'lucide-react';
-import { mockCustomers, mockOrders } from '../services/mockData';
+import React, { useMemo, useState, useEffect } from 'react';
+import { ArrowRight, Edit, Mail, Phone, MapPin, ShoppingCart, TrendingUp, Calendar, Loader2 } from 'lucide-react';
 import { Customer, Order } from '../types';
 import { CUSTOMER_TYPE_LABELS } from '../constants';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { customersService } from '../services/customersService';
+import { ordersService } from '../services/ordersService';
 
 interface CustomerDetailProps {
   customerId: string;
@@ -13,7 +14,37 @@ interface CustomerDetailProps {
 }
 
 const CustomerDetail: React.FC<CustomerDetailProps> = ({ customerId, onBack, onEdit }) => {
-  const customer = mockCustomers.find(c => c.id === customerId);
+  const [customer, setCustomer] = useState<Customer | null>(null);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    loadData();
+  }, [customerId]);
+
+  const loadData = async () => {
+    try {
+      setIsLoading(true);
+      const [customerData, ordersData] = await Promise.all([
+        customersService.getById(customerId),
+        ordersService.getAll()
+      ]);
+      setCustomer(customerData);
+      setOrders(ordersData);
+    } catch (error) {
+      console.error('Error loading customer detail:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center py-12">
+        <Loader2 size={32} className="animate-spin text-blue-600" />
+      </div>
+    );
+  }
 
   if (!customer) {
     return (
@@ -27,7 +58,7 @@ const CustomerDetail: React.FC<CustomerDetailProps> = ({ customerId, onBack, onE
   }
 
   // Get customer orders
-  const customerOrders = mockOrders.filter(o => o.customer_id === customerId);
+  const customerOrders = orders.filter(o => o.customer_id === customerId);
 
   // Calculate statistics
   const stats = useMemo(() => {

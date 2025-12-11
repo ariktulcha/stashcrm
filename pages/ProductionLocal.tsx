@@ -1,13 +1,13 @@
 
-import React, { useState } from 'react';
-import { mockOrders } from '../services/mockData';
+import React, { useState, useEffect } from 'react';
 import { LOCAL_PRODUCTION_STATUS_LABELS } from '../constants';
 import { LocalProductionStatus, Order } from '../types';
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, closestCenter, useDroppable } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useToast } from '../contexts/ToastContext';
-import { Search, Calendar, AlertCircle } from 'lucide-react';
+import { Search, Calendar, AlertCircle, Loader2 } from 'lucide-react';
+import { ordersService } from '../services/ordersService';
 
 interface SortableOrderCardProps {
   order: Order;
@@ -57,10 +57,30 @@ const SortableOrderCard: React.FC<SortableOrderCardProps> = ({ order, onOrderCli
 
 const ProductionLocal: React.FC = () => {
   const { showToast } = useToast();
-  const [orders, setOrders] = useState<Order[]>(mockOrders.filter(o => o.production_type === 'local' && o.status !== 'draft'));
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [deadlineFilter, setDeadlineFilter] = useState<string>('all');
+
+  // Load orders from Supabase
+  useEffect(() => {
+    loadOrders();
+  }, []);
+
+  const loadOrders = async () => {
+    try {
+      setIsLoading(true);
+      const allOrders = await ordersService.getAll();
+      const localOrders = allOrders.filter(o => o.production_type === 'local' && o.status !== 'draft');
+      setOrders(localOrders);
+    } catch (error) {
+      console.error('Error loading local production orders:', error);
+      showToast('שגיאה בטעינת ההזמנות', 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
   
   const columns: LocalProductionStatus[] = ['queued', 'printing', 'quality_check', 'ready_pack', 'packed', 'ready_ship'];
 
@@ -85,7 +105,7 @@ const ProductionLocal: React.FC = () => {
     setActiveId(event.active.id as string);
   };
 
-  const handleDragEnd = (event: DragEndEvent) => {
+  const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
     setActiveId(null);
 
@@ -104,22 +124,21 @@ const ProductionLocal: React.FC = () => {
     
     if (newIndex === -1) return;
 
-    // Update order status
-    const updatedOrders = orders.map(o => 
-      o.id === orderId 
-        ? { ...o, local_production_status: newStatus }
-        : o
-    );
-    
-    setOrders(updatedOrders);
-    
-    // Update in mock data
-    const mockOrderIndex = mockOrders.findIndex(o => o.id === orderId);
-    if (mockOrderIndex !== -1) {
-      mockOrders[mockOrderIndex] = { ...mockOrders[mockOrderIndex], local_production_status: newStatus };
+    try {
+      // Update order in Supabase
+      await ordersService.update(orderId, { local_production_status: newStatus });
+      
+      // Update local state
+      const updatedOrders = orders.map(o =>
+        o.id === orderId ? { ...o, local_production_status: newStatus } : o
+      );
+      setOrders(updatedOrders);
+      
+      showToast(`הזמנה ${order.order_number} הועברה ל-${LOCAL_PRODUCTION_STATUS_LABELS[newStatus]}`);
+    } catch (error) {
+      console.error('Error updating production status:', error);
+      showToast('שגיאה בעדכון סטטוס הייצור', 'error');
     }
-    
-    showToast(`הזמנה ${order.order_number} הועברה ל-${LOCAL_PRODUCTION_STATUS_LABELS[newStatus]}`);
   };
 
   const handleOrderClick = (orderId: string) => {
@@ -148,6 +167,14 @@ const ProductionLocal: React.FC = () => {
       </div>
     );
   };
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center py-12">
+        <Loader2 size={32} className="animate-spin text-blue-600" />
+      </div>
+    );
+  }
 
   return (
     <div className="h-full flex flex-col">

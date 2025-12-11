@@ -1,7 +1,6 @@
 
-import React, { useState, useMemo } from 'react';
-import { Plus, Search, Filter, Calendar, ArrowUpDown, Download, LayoutGrid, List, ShoppingCart } from 'lucide-react';
-import { mockOrders } from '../services/mockData';
+import React, { useState, useMemo, useEffect } from 'react';
+import { Plus, Search, Filter, Calendar, ArrowUpDown, Download, LayoutGrid, List, ShoppingCart, Loader2 } from 'lucide-react';
 import { ORDER_STATUS_LABELS, ORDER_STATUS_COLORS, PRODUCTION_TYPE_LABELS } from '../constants';
 import { Order, OrderStatus } from '../types';
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, closestCenter, useDroppable } from '@dnd-kit/core';
@@ -10,6 +9,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { useToast } from '../contexts/ToastContext';
 import EmptyState from '../components/EmptyState';
 import FilterChips from '../components/FilterChips';
+import { ordersService } from '../services/ordersService';
 
 interface OrdersProps {
   onOrderClick?: (id: string) => void;
@@ -20,7 +20,8 @@ type SortField = 'order_number' | 'created_at' | 'deadline' | 'total_amount' | '
 type SortDirection = 'asc' | 'desc';
 
 const Orders: React.FC<OrdersProps> = ({ onOrderClick, onCreateOrder }) => {
-  const [orders, setOrders] = useState<Order[]>(mockOrders);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [productionTypeFilter, setProductionTypeFilter] = useState('all');
@@ -33,6 +34,24 @@ const Orders: React.FC<OrdersProps> = ({ onOrderClick, onCreateOrder }) => {
   const [viewMode, setViewMode] = useState<'list' | 'kanban'>('list');
   const [activeId, setActiveId] = useState<string | null>(null);
   const { showToast } = useToast();
+
+  // Load orders from Supabase
+  useEffect(() => {
+    loadOrders();
+  }, []);
+
+  const loadOrders = async () => {
+    try {
+      setIsLoading(true);
+      const data = await ordersService.getAll();
+      setOrders(data);
+    } catch (error) {
+      console.error('Error loading orders:', error);
+      showToast('שגיאה בטעינת ההזמנות', 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const filteredAndSortedOrders = useMemo(() => {
     let filtered = orders.filter(order => {
@@ -134,7 +153,7 @@ const Orders: React.FC<OrdersProps> = ({ onOrderClick, onCreateOrder }) => {
     setActiveId(event.active.id as string);
   };
 
-  const handleDragEnd = (event: DragEndEvent) => {
+  const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
     setActiveId(null);
 
@@ -146,19 +165,21 @@ const Orders: React.FC<OrdersProps> = ({ onOrderClick, onCreateOrder }) => {
     const order = orders.find(o => o.id === orderId);
     if (!order) return;
 
-    const updatedOrders = orders.map(o => 
-      o.id === orderId ? { ...o, status: newStatus } : o
-    );
-    
-    setOrders(updatedOrders);
-    
-    // Update in mock data
-    const mockOrderIndex = mockOrders.findIndex(o => o.id === orderId);
-    if (mockOrderIndex !== -1) {
-      mockOrders[mockOrderIndex] = { ...mockOrders[mockOrderIndex], status: newStatus };
+    try {
+      // Update order status in Supabase
+      await ordersService.update(orderId, { status: newStatus });
+      
+      // Update local state
+      const updatedOrders = orders.map(o =>
+        o.id === orderId ? { ...o, status: newStatus } : o
+      );
+      setOrders(updatedOrders);
+      
+      showToast(`ההזמנה עודכנה ל-${ORDER_STATUS_LABELS[newStatus]}`);
+    } catch (error) {
+      console.error('Error updating order status:', error);
+      showToast('שגיאה בעדכון סטטוס ההזמנה', 'error');
     }
-    
-    showToast(`הזמנה ${order.order_number} הועברה ל-${ORDER_STATUS_LABELS[newStatus]}`);
   };
 
   const activeOrder = activeId ? orders.find(o => o.id === activeId) : null;
@@ -253,6 +274,14 @@ const Orders: React.FC<OrdersProps> = ({ onOrderClick, onCreateOrder }) => {
     link.download = `orders_${new Date().toISOString().split('T')[0]}.csv`;
     link.click();
   };
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center py-12">
+        <Loader2 size={32} className="animate-spin text-blue-600" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

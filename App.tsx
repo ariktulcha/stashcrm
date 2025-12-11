@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { Menu, Moon, Sun, Search } from 'lucide-react';
+import { Menu, Moon, Sun, Search, LogOut } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import Dashboard from './pages/Dashboard';
 import Orders from './pages/Orders';
@@ -18,8 +18,10 @@ import Inventory from './pages/Inventory';
 import Finances from './pages/Finances';
 import Tasks from './pages/Tasks';
 import PlaceholderPage from './pages/PlaceholderPage';
+import Login from './pages/Login';
 import { ToastProvider } from './contexts/ToastContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 import CommandPalette from './components/CommandPalette';
 import NotificationsCenter, { Notification } from './components/NotificationsCenter';
 import FloatingActionButton from './components/FloatingActionButton';
@@ -43,6 +45,7 @@ type ViewState =
   | { name: 'settings' };
 
 const AppContent: React.FC = () => {
+  const { isAuthenticated, logout } = useAuth();
   const [currentView, setCurrentView] = useState<ViewState>({ name: 'dashboard' });
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
@@ -57,6 +60,11 @@ const AppContent: React.FC = () => {
       read: false
     }
   ]);
+
+  // Show login page if not authenticated
+  if (!isAuthenticated) {
+    return <Login />;
+  }
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -271,6 +279,13 @@ const AppContent: React.FC = () => {
             >
               {theme === 'light' ? <Moon size={20} /> : <Sun size={20} />}
             </button>
+            <button
+              onClick={logout}
+              className="p-2 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
+              title="התנתק"
+            >
+              <LogOut size={20} />
+            </button>
             <div className="hidden sm:flex items-center gap-3 pr-3 border-r border-slate-200 dark:border-slate-700">
               <div className="hidden sm:block text-right">
                 <div className="text-xs sm:text-sm font-medium text-slate-700 dark:text-slate-200">דני מנהל</div>
@@ -312,9 +327,11 @@ const AppContent: React.FC = () => {
 const App: React.FC = () => {
   return (
     <ThemeProvider>
-      <ToastProvider>
-        <AppContent />
-      </ToastProvider>
+      <AuthProvider>
+        <ToastProvider>
+          <AppContent />
+        </ToastProvider>
+      </AuthProvider>
     </ThemeProvider>
   );
 };

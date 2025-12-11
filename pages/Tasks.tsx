@@ -1,14 +1,15 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { CheckSquare, Calendar, AlertCircle, Plus, Loader2, Edit, Trash2, Filter } from 'lucide-react';
-import { mockTasks } from '../services/mockData';
 import { TASK_PRIORITY_LABELS } from '../constants';
 import { Task } from '../types';
 import Modal from '../components/Modal';
 import { useToast } from '../contexts/ToastContext';
+import { tasksService } from '../services/tasksService';
 
 const Tasks: React.FC = () => {
-  const [tasks, setTasks] = useState<Task[]>(mockTasks);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -19,6 +20,24 @@ const Tasks: React.FC = () => {
   const { showToast } = useToast();
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Load tasks from Supabase
+  useEffect(() => {
+    loadTasks();
+  }, []);
+
+  const loadTasks = async () => {
+    try {
+      setIsLoading(true);
+      const data = await tasksService.getAll();
+      setTasks(data);
+    } catch (error) {
+      console.error('Error loading tasks:', error);
+      showToast('שגיאה בטעינת המשימות', 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
   const [formData, setFormData] = useState({
     title: '',
     status: 'todo' as 'todo' | 'in_progress' | 'completed',
@@ -48,7 +67,7 @@ const Tasks: React.FC = () => {
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.title) {
       showToast('נא להזין כותרת למשימה', 'error');
@@ -56,39 +75,34 @@ const Tasks: React.FC = () => {
     }
 
     setIsSubmitting(true);
-    setTimeout(() => {
+    try {
       if (editingTask) {
         // Update existing task
-        setTasks(prev => prev.map(task => 
-          task.id === editingTask.id 
-            ? {
-                id: task.id,
-                title: formData.title,
-                status: formData.status,
-                priority: formData.priority,
-                due_date: formData.due_date,
-                related_order: formData.related_order || undefined
-              }
-            : task
-        ));
+        await tasksService.update(editingTask.id, {
+          title: formData.title,
+          status: formData.status,
+          priority: formData.priority,
+          due_date: formData.due_date,
+          related_order: formData.related_order || undefined
+        });
         showToast('המשימה עודכנה בהצלחה');
         setIsEditModalOpen(false);
       } else {
         // Create new task
-        const newTask: Task = {
-          id: Math.random().toString(36).substr(2, 9),
+        await tasksService.create({
           title: formData.title,
-          status: 'todo',
+          status: formData.status,
           priority: formData.priority,
           due_date: formData.due_date,
           related_order: formData.related_order || undefined
-        };
-        setTasks(prev => [newTask, ...prev]);
+        });
         showToast('המשימה נוצרה בהצלחה');
         setIsAddModalOpen(false);
       }
       
-      setIsSubmitting(false);
+      // Reload tasks
+      await loadTasks();
+      
       setEditingTask(null);
       setFormData({
         title: '',
@@ -97,7 +111,12 @@ const Tasks: React.FC = () => {
         due_date: new Date().toISOString().split('T')[0],
         related_order: ''
       });
-    }, 500);
+    } catch (error) {
+      console.error('Error saving task:', error);
+      showToast('שגיאה בשמירת המשימה', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleEditTask = (task: Task) => {
@@ -117,18 +136,36 @@ const Tasks: React.FC = () => {
     setIsDeleteModalOpen(true);
   };
 
-  const confirmDeleteTask = () => {
+  const confirmDeleteTask = async () => {
     if (!deletingTask) return;
-    setTasks(prev => prev.filter(task => task.id !== deletingTask.id));
-    showToast('המשימה נמחקה בהצלחה');
-    setIsDeleteModalOpen(false);
-    setDeletingTask(null);
+    try {
+      await tasksService.delete(deletingTask.id);
+      showToast('המשימה נמחקה בהצלחה');
+      setIsDeleteModalOpen(false);
+      setDeletingTask(null);
+      // Reload tasks
+      await loadTasks();
+    } catch (error) {
+      console.error('Error deleting task:', error);
+      showToast('שגיאה במחיקת המשימה', 'error');
+    }
   };
 
-  const toggleTaskStatus = (taskId: string) => {
-    setTasks(prev => prev.map(t => 
-      t.id === taskId ? { ...t, status: t.status === 'completed' ? 'todo' : 'completed' } : t
-    ));
+  const toggleTaskStatus = async (taskId: string) => {
+    try {
+      const task = tasks.find(t => t.id === taskId);
+      if (!task) return;
+      
+      await tasksService.update(taskId, {
+        status: task.status === 'completed' ? 'todo' : 'completed'
+      });
+      
+      // Reload tasks
+      await loadTasks();
+    } catch (error) {
+      console.error('Error toggling task status:', error);
+      showToast('שגיאה בעדכון סטטוס המשימה', 'error');
+    }
   };
 
   return (
@@ -177,8 +214,16 @@ const Tasks: React.FC = () => {
         </div>
       </div>
 
-      <div className="grid gap-4">
-        {filteredTasks.map(task => (
+      {isLoading ? (
+        <div className="flex justify-center items-center py-12">
+          <Loader2 size={32} className="animate-spin text-blue-600" />
+        </div>
+      ) : (
+        <div className="grid gap-4">
+          {filteredTasks.length === 0 ? (
+            <div className="text-center text-slate-400 py-10">אין משימות להציג</div>
+          ) : (
+            filteredTasks.map(task => (
           <div key={task.id} className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex items-center justify-between hover:shadow-md transition-shadow group">
             <div className="flex items-center gap-4 flex-1">
                <button 
@@ -231,9 +276,9 @@ const Tasks: React.FC = () => {
               </div>
             </div>
           </div>
-        ))}
-        {filteredTasks.length === 0 && <div className="text-center text-slate-400 py-10">אין משימות להציג</div>}
-      </div>
+        )))}
+        </div>
+      )}
 
       {/* Add/Edit Task Modal */}
       <Modal 
